@@ -1,0 +1,57 @@
+{
+  "parameters": {
+    "K": 6.0,
+    "p": 4.8027e-42,
+    "N": 4.197668e+121,
+    "f1": 104.37,
+    "f6_lenr": 1.0527
+  },
+  "structural_functions": {
+    "U": 3.0000473161956447,
+    "f1": 104.37,
+    "f2": 1.791759469228055,
+    "f3": 5.368072279692217e-21,
+    "f4": 2.0821621171424406e+41,
+    "f5": 3.3486637593074837,
+    "f6": 1.0527,
+    "critical_product": 2.88162e-41,
+    "critical_root": 2.8773805556835694e-41,
+    "critical_relative_error": 0.0014733693490965095
+  },
+  "lenr_scales": {
+    "alpha_graph": 0.0072980714413731435,
+    "thermal_300K_ev": 0.025851999786435,
+    "Q1_MeV": 3.282981,
+    "Q2_MeV": 17.679351,
+    "B1_MeV": 0.476209,
+    "B2_MeV": 0.444076,
+    "Q1_over_B1": 6.893991923714167,
+    "Q2_over_B2": 39.811543519577725,
+    "B1_over_kBT": 18420586.56715119,
+    "graph_factor_A": 5.974628082206166,
+    "graph_factor_B": 10.437000000000001,
+    "graph_factor_C": 131.49781707680253
+  },
+  "balance": {
+    "simulated_horizon_h": 100.0,
+    "avg_component_A_W": 1974226.7,
+    "avg_net_component_B_W": 7188.9,
+    "avg_total_model_power_W": 1981415.5999999999,
+    "avg_useful_output_W": 99070.8,
+    "useful_output_MWh": 9.90708,
+    "gross_component_B_energy_MWh": 0.845756,
+    "net_component_B_energy_MWh": 0.7188926,
+    "total_modeled_events": 8.23e+21,
+    "generated_mass_scale_product_ng": 54642.97,
+    "input_component_fraction_percent": 0.068647,
+    "model_energy_gain_coefficient": 35665481.0
+  },
+  "convergence": {
+    "sigma": 0.05,
+    "q": 6,
+    "n_max": 5000,
+    "partial_sum": 968851442420.1418,
+    "last_term": 4.175616946470609e-87,
+    "tail_bound": 1.6932419174416113e-85
+  }
+}

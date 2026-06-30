@@ -1,0 +1,445 @@
+import math
+import sys
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+from tabulate import tabulate
+
+HAS_MATPLOTLIB = True
+
+class CorrectedLENRMotorGenerator:
+    def __init__(self):
+        # === ОСНОВНЫЕ ФИЗИЧЕСКИЕ ПАРАМЕТРЫ ===
+        self.sim_time = 360000.0  # 100 часов
+        self.dt = 1.0  # шаг симуляции в секундах
+
+        # === ТОЧНЫЕ ФИЗИЧЕСКИЕ КОНСТАНТЫ ===
+        self.avogadro = 6.02214076e23  # mol^-1 (точная)
+        self.elementary_charge = 1.602176634e-19  # Кл (точная)
+        self.atomic_mass_unit = 1.66053906892e-27  # кг (точная)
+        self.boltzmann = 1.380649e-23  # Дж/К (точная)
+        self.c = 299792458.0  # м/с (точная)
+        self.planck = 6.62607015e-34  # Дж⋅с (точная)
+        self.barn = 1.0e-28  # м² (определение барна)
+        
+        # === ЭЛЕКТРОМАГНИТНЫЕ ПАРАМЕТРЫ ===
+        self.rotor_inertia = 0.05  # кг*м²
+        self.magnetic_flux_density = 1.2  # Тл
+        self.coil_turns = 1000  # витков
+        self.coil_area = 0.02  # м²
+        self.coil_resistance = 0.5  # Ом
+
+        # === МЕХАНИЧЕСКИЕ ПАРАМЕТРЫ ===
+        self.friction_coefficient = 0.01
+        self.bearing_losses = 5.0  # Вт
+
+        # === КОРРЕКТНЫЕ ЯДЕРНЫЕ ПАРАМЕТРЫ ===
+        # Используем реальные ядерные реакции с измеренными параметрами
+        
+        # B-10 + n → Li-7 + α (основная реакция для BNCT)
+        self.boron_mass = 1.0  # кг бора (B-10, 19.9% природного бора)
+        self.boron_10_fraction = 0.199  # доля B-10 в природном боре
+        self.boron_atoms_initial = (self.boron_mass * self.boron_10_fraction) / (10.0 * self.atomic_mass_unit)
+        
+        # Реалистичные энергии реакций (из экспериментальных данных)
+        self.boron_neutron_q_value = 2.31e6 * self.elementary_charge  # Дж (2.31 МэВ)
+        self.boron_neutron_cross_section = 3840.0 * self.barn  # м² (тепловые нейтроны)
+        
+        # Li-7 + p → 2α (анейтронная реакция)
+        self.lithium_mass = 0.1  # кг лития-7  
+        self.lithium_atoms_initial = self.lithium_mass / (7.0 * self.atomic_mass_unit)
+        self.lithium_proton_q_value = 17.347e6 * self.elementary_charge  # Дж (17.347 МэВ)
+        self.lithium_proton_cross_section = 0.001 * self.barn  # м² (при ~600 кэВ)
+        
+        # D-D реакции (если используется дейтерий)
+        self.deuterium_mass = 0.01  # кг D2O
+        self.dd_q_value = 3.27e6 * self.elementary_charge  # Дж (3.27 МэВ)
+        self.dd_cross_section = 0.1 * self.barn  # м²
+        
+        # Реалистичные вероятности реакций
+        self.thermal_neutron_velocity = 2200.0  # м/с (для 0.025 эВ нейтронов)
+        self.neutron_flux_density = 1e12  # нейтронов/(м²⋅с) - типично для исследовательских реакторов
+        
+        # === ТЕРМОДИНАМИЧЕСКИЕ ПАРАМЕТРЫ ===
+        self.mass_coolant = 1000.0  # кг
+        self.specific_heat = 4186.0  # Дж/(кг*К)
+        self.T_initial = 298.15  # К (25°C)
+        self.T_ambient = 293.15  # К (20°C)
+        self.heat_transfer_coeff = 10.0  # Вт/К
+
+        # === КПД КОМПОНЕНТОВ ===
+        self.eta_generator = 0.94
+        self.eta_motor = 0.90
+        self.eta_power_electronics = 0.96
+        self.eta_thermoelectric = 0.08
+        self.eta_heat_recovery = 0.25
+        self.eta_nuclear = 0.85  # КПД преобразования ядерной энергии
+
+        # === РАСПРЕДЕЛЕНИЕ ЭНЕРГИИ ===
+        self.fraction_to_motor = 0.70
+        self.fraction_heating = 0.20
+        self.fraction_electronics = 0.05
+        self.fraction_net_output = 0.05
+
+        # === НАЧАЛЬНЫЕ УСЛОВИЯ ===
+        self.omega_initial = 150.0  # рад/с
+        self.P_start_external = 10000.0  # Вт
+
+        # Инициализация переменных
+        self.reset_simulation()
+
+    def reset_simulation(self):
+        self.times = []
+        self.omega_vals = []
+        self.P_generated_vals = []
+        self.P_nuclear_vals = []
+        self.P_electromagnetic_vals = []
+        self.P_net_vals = []
+        self.T_vals = []
+        self.nuclear_reactions_vals = []
+        self.efficiency_vals = []
+
+        self.omega = self.omega_initial
+        self.T_coolant = self.T_initial
+        self.startup_phase = True
+        self.startup_energy = 0.0
+
+        # Ядерные материалы
+        self.boron_atoms_remaining = self.boron_atoms_initial
+        self.lithium_atoms_remaining = self.lithium_atoms_initial
+        self.neutron_population = 1e15  # начальная популяция нейтронов
+        
+        # Продукты реакций
+        self.helium_produced = 0.0
+        self.tritium_produced = 0.0
+        self.total_nuclear_energy = 0.0
+
+    def calculate_nuclear_reaction_rate(self, T, neutron_flux):
+        """
+        Рассчитывает скорость ядерных реакций на основе реальной физики
+        """
+        # B-10(n,α)Li-7 реакция
+        if self.boron_atoms_remaining > 0:
+            # Плотность ядер B-10 в м^-3
+            boron_density = self.boron_atoms_remaining / (self.mass_coolant / 1000.0)  # ядер/м³
+            
+            # Скорость реакции (реакций/с/м³)
+            reaction_rate = (boron_density * neutron_flux * 
+                           self.boron_neutron_cross_section * 
+                           self.thermal_neutron_velocity)
+            
+            # Количество реакций за временной шаг
+            reactions_per_timestep = reaction_rate * self.dt * (self.mass_coolant / 1000.0)
+            
+            # Ограничиваем количество реакций доступными ядрами
+            boron_reactions = min(reactions_per_timestep, self.boron_atoms_remaining * 0.001)
+        else:
+            boron_reactions = 0
+            
+        # Li-7(p,α)α реакция (требует протонов высокой энергии)
+        # Упрощенная модель - зависит от температуры и энергии частиц
+        if self.lithium_atoms_remaining > 0 and T > 1000:  # К
+            thermal_energy = self.boltzmann * T  # Дж
+            # Простая модель вероятности реакции
+            if thermal_energy > 100 * 1000 * self.elementary_charge:  # >100 кэВ
+                lithium_density = self.lithium_atoms_remaining / (self.mass_coolant / 1000.0)
+                # Крайне упрощенная модель
+                lithium_reactions = lithium_density * 1e-20 * self.dt * (self.mass_coolant / 1000.0)
+                lithium_reactions = min(lithium_reactions, self.lithium_atoms_remaining * 1e-6)
+            else:
+                lithium_reactions = 0
+        else:
+            lithium_reactions = 0
+            
+        return boron_reactions, lithium_reactions
+
+    def calculate_neutron_flux(self, T, omega):
+        """
+        Упрощенная модель нейтронного потока
+        В реальности нужен внешний источник нейтронов
+        """
+        # Базовый поток уменьшается из-за поглощения
+        base_flux = self.neutron_flux_density * math.exp(-self.total_nuclear_energy / 1e12)
+        
+        # Небольшое влияние температуры (тепловые нейтроны)
+        temp_factor = math.sqrt(T / 300.0)
+        
+        # Влияние вращения (генерация нейтронов при высоких энергиях - очень спекулятивно)
+        rotation_factor = 1.0 + (omega / 1000.0) * 0.1
+        
+        return base_flux * temp_factor * rotation_factor
+
+    def calculate_emf(self, omega, theta):
+        """Стандартное ЭДС для генератора"""
+        emf_fundamental = self.coil_turns * self.magnetic_flux_density * self.coil_area * omega
+        emf_harmonic = 0.1 * emf_fundamental * math.sin(3 * theta)
+        return emf_fundamental + emf_harmonic
+
+    def calculate_motor_torque(self, power_motor, omega):
+        """Стандартный расчет момента двигателя"""
+        if omega > 0.1:
+            torque = power_motor * self.eta_motor / omega
+        else:
+            torque = 0.0
+        return torque
+
+    def calculate_friction_losses(self, omega):
+        """Потери на трение"""
+        friction_power = self.friction_coefficient * omega**2 + self.bearing_losses
+        return friction_power
+
+    def calculate_power_generated(self, omega, theta, T):
+        """
+        Расчет общей мощности с корректными ядерными реакциями
+        """
+        # Электромагнитная мощность
+        load_resistance = 10.0  # Ом
+        emf = self.calculate_emf(omega, theta)
+        total_resistance = self.coil_resistance + load_resistance
+        if total_resistance > 0:
+            current = emf / total_resistance
+            P_electromagnetic = current**2 * load_resistance * self.eta_generator
+        else:
+            P_electromagnetic = 0.0
+
+        # Ядерная мощность
+        neutron_flux = self.calculate_neutron_flux(T, omega)
+        boron_reactions, lithium_reactions = self.calculate_nuclear_reaction_rate(T, neutron_flux)
+        
+        # Энергия от ядерных реакций
+        nuclear_energy_rate = (boron_reactions * self.boron_neutron_q_value + 
+                              lithium_reactions * self.lithium_proton_q_value)
+        
+        P_nuclear = nuclear_energy_rate * self.eta_nuclear
+        
+        # Обновляем количество ядер
+        self.boron_atoms_remaining -= boron_reactions
+        self.lithium_atoms_remaining -= lithium_reactions
+        
+        # Продукты реакций
+        self.helium_produced += boron_reactions + 2 * lithium_reactions  # α-частицы
+        self.total_nuclear_energy += nuclear_energy_rate * self.dt
+        
+        # Обновляем нейтронную популяцию (поглощение бором)
+        self.neutron_population *= math.exp(-boron_reactions / 1e12)
+        
+        total_reactions = boron_reactions + lithium_reactions
+        
+        return P_electromagnetic + P_nuclear, P_nuclear, P_electromagnetic, total_reactions
+
+    def run_simulation(self):
+        """Запуск симуляции"""
+        self.reset_simulation()
+        total_steps = int(self.sim_time / self.dt)
+        theta = 0.0
+
+        for step in range(total_steps):
+            t = step * self.dt
+            theta += self.omega * self.dt
+
+            # Расчет мощности
+            P_total, P_nuclear, P_electromagnetic, total_reactions = self.calculate_power_generated(
+                self.omega, theta, self.T_coolant)
+
+            # Распределение энергии
+            if self.startup_phase and self.startup_energy < 20000:
+                P_motor_input = self.P_start_external * self.eta_power_electronics
+                self.startup_energy += P_motor_input * self.dt
+                P_external_input = self.P_start_external
+            else:
+                self.startup_phase = False
+                P_motor_input = P_total * self.fraction_to_motor * self.eta_power_electronics
+                P_external_input = 0.0
+
+            # Механическая динамика
+            torque_motor = self.calculate_motor_torque(P_motor_input, self.omega)
+            friction_power = self.calculate_friction_losses(self.omega)
+            torque_friction = friction_power / (self.omega + 0.1)
+            torque_net = torque_motor - torque_friction
+            alpha = torque_net / self.rotor_inertia
+            alpha = max(-100, min(alpha, 100))
+            self.omega += alpha * self.dt
+            self.omega = max(0, min(self.omega, 200.0))
+
+            # Тепловая динамика
+            heat_input = (P_nuclear + friction_power + P_total * self.fraction_heating) * self.dt
+            heat_loss = self.heat_transfer_coeff * (self.T_coolant - self.T_ambient) * self.dt
+            net_heat = heat_input - heat_loss
+            dT = net_heat / (self.mass_coolant * self.specific_heat)
+            self.T_coolant += dT
+            self.T_coolant = max(self.T_ambient, min(self.T_coolant, 1500.0))
+
+            # Сохранение результатов
+            self.times.append(t)
+            self.omega_vals.append(self.omega)
+            self.P_generated_vals.append(P_total)
+            self.P_nuclear_vals.append(P_nuclear)
+            self.P_electromagnetic_vals.append(P_electromagnetic)
+            self.P_net_vals.append(P_total * self.fraction_net_output)
+            self.T_vals.append(self.T_coolant)
+            self.nuclear_reactions_vals.append(total_reactions)
+
+        return self.calculate_results()
+
+    def calculate_results(self):
+        """Расчет итоговых результатов"""
+        results = {}
+        if len(self.times) > 0:
+            results['avg_power_total'] = np.mean(self.P_generated_vals)
+            results['avg_power_nuclear'] = np.mean(self.P_nuclear_vals)
+            results['avg_power_electromagnetic'] = np.mean(self.P_electromagnetic_vals)
+            results['avg_power_net'] = np.mean(self.P_net_vals)
+            results['avg_omega'] = np.mean(self.omega_vals)
+            results['avg_temperature'] = np.mean(self.T_vals)
+            results['max_power_total'] = max(self.P_generated_vals)
+            results['max_power_nuclear'] = max(self.P_nuclear_vals)
+            results['max_temperature'] = max(self.T_vals)
+            results['final_omega'] = self.omega_vals[-1]
+            results['final_temperature'] = self.T_vals[-1]
+
+            # Ядерные результаты
+            results['total_nuclear_reactions'] = sum(self.nuclear_reactions_vals)
+            results['boron_consumed_fraction'] = 1.0 - (self.boron_atoms_remaining / self.boron_atoms_initial)
+            results['lithium_consumed_fraction'] = 1.0 - (self.lithium_atoms_remaining / self.lithium_atoms_initial)
+            results['helium_produced_kg'] = self.helium_produced * 4.0 * self.atomic_mass_unit
+            results['total_nuclear_energy_mwh'] = self.total_nuclear_energy / 3.6e9  # МВт⋅ч
+            
+            # Энергетический баланс
+            total_input_energy = self.P_start_external * min(self.startup_energy / self.P_start_external, 20000 / self.P_start_external)
+            total_output_energy = sum(self.P_generated_vals) * self.dt
+            results['energy_gain'] = total_output_energy / max(total_input_energy, 1.0)
+            
+            # Время активации ядерных реакций
+            results['nuclear_activation_time'] = None
+            for i, p_nuclear in enumerate(self.P_nuclear_vals):
+                if p_nuclear > 100:  # Вт
+                    results['nuclear_activation_time'] = self.times[i]
+                    break
+
+        return results
+
+    def print_detailed_report(self, results):
+        """Вывод детального отчета"""
+        print("\n" + "=" * 90)
+        print("🔬 ФИЗИЧЕСКИ КОРРЕКТНАЯ МОДЕЛЬ LENR ДВИГАТЕЛЯ-ГЕНЕРАТОРА")
+        print("=" * 90)
+        
+        print(f"\n📊 ПАРАМЕТРЫ СИМУЛЯЦИИ:")
+        print(f"Ядерные реакции активированы: {'Да' if results['avg_power_nuclear'] > 1 else 'Нет'}")
+        if results.get('nuclear_activation_time'):
+            print(f"Время активации: {results['nuclear_activation_time']:.0f} с")
+
+        print(f"\n⚛️ ЯДЕРНЫЕ РЕАКЦИИ:")
+        print(f"Общее количество реакций: {results['total_nuclear_reactions']:.2e}")
+        print(f"Доля потребленного бора-10: {results['boron_consumed_fraction']*100:.6f}%")
+        print(f"Доля потребленного лития-7: {results['lithium_consumed_fraction']*100:.6f}%")
+        print(f"Произведено гелия: {results['helium_produced_kg']*1e9:.2f} нг")
+        print(f"Ядерная энергия: {results['total_nuclear_energy_mwh']:.6f} МВт⋅ч")
+
+        print(f"\n⚡ ЭНЕРГЕТИЧЕСКИЙ БАЛАНС:")
+        print(f"Средняя общая мощность: {results['avg_power_total']:.1f} Вт")
+        print(f"Средняя ядерная мощность: {results['avg_power_nuclear']:.1f} Вт")
+        print(f"Средняя электромагнитная мощность: {results['avg_power_electromagnetic']:.1f} Вт")
+        print(f"Средняя полезная мощность: {results['avg_power_net']:.1f} Вт")
+        print(f"Коэффициент усиления энергии: {results['energy_gain']:.3f}")
+
+        print(f"\n🌡️ ТЕПЛОВЫЕ ХАРАКТЕРИСТИКИ:")
+        print(f"Средняя температура: {results['avg_temperature']-273.15:.1f}°C")
+        print(f"Максимальная температура: {results['max_temperature']-273.15:.1f}°C")
+        print(f"Конечная температура: {results['final_temperature']-273.15:.1f}°C")
+
+        print(f"\n🔧 МЕХАНИЧЕСКИЕ ХАРАКТЕРИСТИКИ:")
+        print(f"Средняя угловая скорость: {results['avg_omega']:.1f} рад/с")
+        print(f"Конечная угловая скорость: {results['final_omega']:.1f} рад/с")
+
+        print(f"\n📝 ФИЗИЧЕСКИЕ КОНСТАНТЫ (ТОЧНЫЕ):")
+        print(f"Число Авогадро: {self.avogadro:.8e} моль⁻¹")
+        print(f"Элементарный заряд: {self.elementary_charge:.9e} Кл")
+        print(f"Атомная единица массы: {self.atomic_mass_unit:.11e} кг")
+        print(f"Барн: {self.barn:.1e} м²")
+
+    def create_plots(self):
+        """Создание графиков"""
+        if not HAS_MATPLOTLIB:
+            print("Matplotlib не доступен")
+            return
+            
+        fig, axs = plt.subplots(3, 2, figsize=(15, 12))
+        time_hours = np.array(self.times) / 3600
+
+        # График 1: Мощности
+        axs[0, 0].plot(time_hours, self.P_generated_vals, 'b-', linewidth=2, label='Общая мощность')
+        axs[0, 0].plot(time_hours, self.P_nuclear_vals, 'r-', linewidth=2, label='Ядерная мощность')
+        axs[0, 0].plot(time_hours, self.P_electromagnetic_vals, 'g-', linewidth=2, label='Электромагнитная')
+        axs[0, 0].plot(time_hours, self.P_net_vals, 'purple', linewidth=3, label='Полезная мощность')
+        axs[0, 0].set_xlabel('Время (часы)')
+        axs[0, 0].set_ylabel('Мощность (Вт)')
+        axs[0, 0].set_title('Энергетические потоки')
+        axs[0, 0].legend()
+        axs[0, 0].grid(True, alpha=0.3)
+
+        # График 2: Температура
+        axs[0, 1].plot(time_hours, np.array(self.T_vals)-273.15, 'orange', linewidth=2)
+        axs[0, 1].set_xlabel('Время (часы)')
+        axs[0, 1].set_ylabel('Температура (°C)')
+        axs[0, 1].set_title('Тепловая динамика')
+        axs[0, 1].grid(True, alpha=0.3)
+
+        # График 3: Ядерные реакции
+        axs[1, 0].plot(time_hours, self.nuclear_reactions_vals, 'red', linewidth=2)
+        axs[1, 0].set_xlabel('Время (часы)')
+        axs[1, 0].set_ylabel('Реакций/с')
+        axs[1, 0].set_title('Скорость ядерных реакций')
+        axs[1, 0].grid(True, alpha=0.3)
+
+        # График 4: Угловая скорость
+        axs[1, 1].plot(time_hours, self.omega_vals, 'purple', linewidth=2)
+        axs[1, 1].set_xlabel('Время (часы)')
+        axs[1, 1].set_ylabel('Угловая скорость (рад/с)')
+        axs[1, 1].set_title('Динамика ротора')
+        axs[1, 1].grid(True, alpha=0.3)
+
+        # График 5: Расход материалов
+        boron_consumed = [(1 - self.boron_atoms_remaining / self.boron_atoms_initial) * 100] * len(time_hours)
+        lithium_consumed = [(1 - self.lithium_atoms_remaining / self.lithium_atoms_initial) * 100] * len(time_hours)
+        axs[2, 0].plot(time_hours, boron_consumed, 'b-', linewidth=2, label='Бор-10 (%)')
+        axs[2, 0].plot(time_hours, lithium_consumed, 'm-', linewidth=2, label='Литий-7 (%)')
+        axs[2, 0].set_xlabel('Время (часы)')
+        axs[2, 0].set_ylabel('Потребление (%)')
+        axs[2, 0].set_title('Расход ядерных материалов')
+        axs[2, 0].legend()
+        axs[2, 0].grid(True, alpha=0.3)
+
+        # График 6: Энергетический спектр
+        avg_nuclear = np.mean(self.P_nuclear_vals)
+        avg_electromagnetic = np.mean(self.P_electromagnetic_vals)
+        sources = ['Ядерная', 'Электромагнитная']
+        powers = [avg_nuclear, avg_electromagnetic]
+        colors = ['red', 'blue']
+        axs[2, 1].pie(powers, labels=sources, colors=colors, autopct='%1.1f%%', startangle=90)
+        axs[2, 1].set_title('Источники энергии')
+
+        plt.tight_layout()
+        plt.suptitle('🔬 ФИЗИЧЕСКИ КОРРЕКТНАЯ МОДЕЛЬ LENR СИСТЕМЫ', fontsize=14, fontweight='bold', y=0.98)
+        return fig
+
+# === ЗАПУСК СИМУЛЯЦИИ ===
+if __name__ == "__main__":
+    print("🔬 ЗАПУСК ФИЗИЧЕСКИ КОРРЕКТНОЙ МОДЕЛИ LENR ДВИГАТЕЛЯ-ГЕНЕРАТОРА")
+    print("=" * 70)
+    
+    lenr_system = CorrectedLENRMotorGenerator()
+    results = lenr_system.run_simulation()
+    lenr_system.print_detailed_report(results)
+    
+    if HAS_MATPLOTLIB:
+        fig = lenr_system.create_plots()
+        plt.show()
+        
+    print("\n" + "=" * 70)
+    print("📋 ЗАКЛЮЧЕНИЕ:")
+    print("Модель использует точные физические константы и реалистичные")
+    print("ядерные реакции. LENR эффекты крайне маловероятны при")
+    print("моделируемых условиях согласно современной ядерной физике.")
+    print("=" * 70)
+

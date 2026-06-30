@@ -1,0 +1,255 @@
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import odeint
+import seaborn as sns
+from tabulate import tabulate
+import pandas as pd
+
+class CorrectedNuclearTransmutationModel:
+    def __init__(self, elements, neutron_flux=1e13, catalyst_efficiency=1.0):
+        self.elements = elements
+        self.neutron_flux = neutron_flux  # нейтронов/см²·с
+        self.catalyst_efficiency = catalyst_efficiency
+        
+        # Физические константы
+        self.barn_to_cm2 = 1e-24  # барн в см²
+        self.mev_to_joule = 1.602e-13  # МэВ в Джоули
+        
+        # Устанавливаем реальные ядерные параметры
+        self._set_nuclear_data()
+    
+    def _set_nuclear_data(self):
+        """Устанавливает реальные ядерные данные"""
+        nuclear_data = {
+            'H': {'cross_section': 0.332, 'binding_energy': 0, 'q_value': 0},
+            'He': {'cross_section': 0.007, 'binding_energy': 7.07, 'q_value': 0},
+            'Li': {'cross_section': 940, 'binding_energy': 5.33, 'q_value': 4.78},  # Li-6(n,α)T
+            'Be': {'cross_section': 0.008, 'binding_energy': 6.46, 'q_value': 0},
+            'B': {'cross_section': 3837, 'binding_energy': 6.93, 'q_value': 2.79},  # B-10(n,α)Li-7
+            'C': {'cross_section': 0.0035, 'binding_energy': 7.68, 'q_value': 0},
+            'N': {'cross_section': 0.075, 'binding_energy': 7.48, 'q_value': 0},
+            'O': {'cross_section': 0.00019, 'binding_energy': 7.98, 'q_value': 0},
+            'F': {'cross_section': 0.0096, 'binding_energy': 7.78, 'q_value': 0},
+            'Ne': {'cross_section': 0.04, 'binding_energy': 8.03, 'q_value': 0}
+        }
+        
+        for element in self.elements:
+            name = element['name']
+            if name in nuclear_data:
+                element.update(nuclear_data[name])
+            else:
+                element.update({'cross_section': 0.001, 'binding_energy': 7.0, 'q_value': 0})
+
+    def transmutation_rates(self, y, t):
+        """Реальные скорости ядерных реакций"""
+        rates = np.zeros_like(y)
+        
+        for i, element in enumerate(self.elements):
+            if y[i] <= 0:
+                continue
+            
+            # Плотность атомов (атомов/см³)
+            atomic_density = y[i] / 1e24
+            
+            # Скорость реакции (реакций/см³·с)
+            reaction_rate = (self.neutron_flux * 
+                           element['cross_section'] * 
+                           self.barn_to_cm2 * 
+                           atomic_density * 
+                           self.catalyst_efficiency)
+            
+            # Убыль исходного элемента
+            rates[i] -= reaction_rate * 1e24
+            
+            # Продукты реакций (только для элементов с высокими сечениями)
+            if element['name'] == 'Li':  # Li-6 + n → He-4 + T
+                if i < len(rates) - 1:
+                    rates[1] += reaction_rate * 1e24 * 0.5  # He
+                    rates[0] += reaction_rate * 1e24 * 0.5  # H (тритий)
+            
+            elif element['name'] == 'B':  # B-10 + n → Li-7 + α
+                if i > 2:
+                    rates[2] += reaction_rate * 1e24 * 0.7  # Li
+                if i > 0:
+                    rates[1] += reaction_rate * 1e24 * 0.3  # He
+        
+        return rates
+    
+    def simulate(self, time_span):
+        """Моделирование трансмутации"""
+        initial_amounts = np.array([element['initial_amount'] for element in self.elements])
+        solution = odeint(self.transmutation_rates, initial_amounts, time_span)
+        return solution
+    
+    def calculate_energy(self, results, time_span):
+        """Расчет выделенной энергии"""
+        energy_released = np.zeros(len(time_span))
+        
+        for i in range(1, len(results)):
+            for j, element in enumerate(self.elements):
+                # Количество прореагировавших ядер
+                reacted = results[i-1][j] - results[i][j]
+                if reacted > 0 and element['q_value'] > 0:
+                    # Энергия = количество реакций × Q-значение
+                    energy_released[i] += reacted * element['q_value'] * self.mev_to_joule
+        
+        return energy_released
+    
+    def calculate_input_energy(self, time_span):
+        """Энергия для поддержания нейтронного потока"""
+        # Примерно 10 МэВ на производство одного нейтрона
+        neutron_production_energy = 10 * self.mev_to_joule  # Дж на нейтрон
+        flux_volume = 1  # см³
+        
+        energy_input = np.zeros(len(time_span))
+        for i in range(1, len(time_span)):
+            dt = time_span[i] - time_span[i-1]
+            neutrons_needed = self.neutron_flux * flux_volume * dt
+            energy_input[i] = neutrons_needed * neutron_production_energy
+        
+        return energy_input
+    
+    def economic_analysis(self, initial_amounts, final_amounts):
+        """Экономический анализ"""
+        results = []
+        
+        # Реальные рыночные цены ($/г)
+        market_prices = {
+            'H': 30000,   # тритий
+            'He': 2000,   # He-3
+            'Li': 1000,   # Li-6
+            'Be': 500,    # бериллий
+            'B': 100,     # обогащенный B-10
+            'C': 0.01,    # углерод
+            'N': 0.1,     # азот
+            'O': 0.05,    # кислород
+            'F': 10,      # фтор
+            'Ne': 50      # неон
+        }
+        
+        for i, element in enumerate(self.elements):
+            initial = initial_amounts[i]
+            final = final_amounts[i]
+            change = final - initial
+            
+            # Масса в граммах
+            mass_change = change * element['atomic_mass'] * 1.66e-24  # г
+            
+            price = market_prices.get(element['name'], 1)
+            value_change = mass_change * price
+            
+            results.append({
+                'element': element['name'],
+                'initial': initial,
+                'final': final,
+                'change': change,
+                'mass_change_g': mass_change,
+                'value_change_usd': value_change
+            })
+        
+        return results
+
+# Элементы с правильными атомными массами
+elements = [
+    {'name': 'H', 'atomic_mass': 1.008, 'initial_amount': 1e24},
+    {'name': 'He', 'atomic_mass': 4.003, 'initial_amount': 1e23},
+    {'name': 'Li', 'atomic_mass': 6.941, 'initial_amount': 1e22},
+    {'name': 'Be', 'atomic_mass': 9.012, 'initial_amount': 1e21},
+    {'name': 'B', 'atomic_mass': 10.811, 'initial_amount': 1e20},
+    {'name': 'C', 'atomic_mass': 12.011, 'initial_amount': 1e24},
+    {'name': 'N', 'atomic_mass': 14.007, 'initial_amount': 1e23},
+    {'name': 'O', 'atomic_mass': 15.999, 'initial_amount': 1e24},
+    {'name': 'F', 'atomic_mass': 18.998, 'initial_amount': 1e20},
+    {'name': 'Ne', 'atomic_mass': 20.180, 'initial_amount': 1e19},
+]
+
+# Создание модели
+model = CorrectedNuclearTransmutationModel(elements, neutron_flux=1e14, catalyst_efficiency=1.0)
+
+# Моделирование (1000 секунд)
+time_span = np.linspace(0, 1000, 1001)
+results = model.simulate(time_span)
+
+# Расчеты
+energy_released = model.calculate_energy(results, time_span)
+energy_input = model.calculate_input_energy(time_span)
+economic_results = model.economic_analysis(results[0], results[-1])
+
+# Результаты
+print("=== ИСПРАВЛЕННАЯ МОДЕЛЬ ЯДЕРНОЙ ТРАНСМУТАЦИИ ===\n")
+
+# Показываем только элементы с изменениями > 0.1%
+df = pd.DataFrame(economic_results)
+df['change_percent'] = (df['change'] / df['initial'] * 100)
+significant_changes = df[abs(df['change_percent']) > 0.1]
+
+if not significant_changes.empty:
+    print("Элементы с изменениями > 0.1%:")
+    print(tabulate(significant_changes[['element', 'initial', 'final', 'change_percent', 'value_change_usd']], 
+                   headers=['Элемент', 'Начальное', 'Конечное', 'Изменение %', 'Стоимость $'], 
+                   tablefmt='pretty', floatfmt=".2e"))
+else:
+    print("Значимых изменений не обнаружено (< 0.1%)")
+
+# Энергетический баланс
+total_released = np.sum(energy_released)
+total_input = np.sum(energy_input)
+print(f"\n=== ЭНЕРГЕТИЧЕСКИЙ БАЛАНС ===")
+print(f"Выделено энергии: {total_released:.6e} Дж")
+print(f"Потрачено энергии: {total_input:.6e} Дж")
+print(f"Чистый баланс: {total_released - total_input:.6e} Дж")
+print(f"КПД: {(total_released/total_input)*100:.6f}%" if total_input > 0 else "КПД: неопределен")
+
+# Экономика
+total_value = df['value_change_usd'].sum()
+print(f"Изменение стоимости: ${total_value:.2f}")
+
+# Графики
+sns.set_style("whitegrid")
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+
+# График 1: Количества элементов
+for i, element in enumerate(elements):
+    if np.max(abs(results[:, i] - results[0, i])) / results[0, i] > 1e-6:
+        ax1.plot(time_span, results[:, i], label=element['name'], alpha=0.8)
+ax1.set_xlabel('Время (с)')
+ax1.set_ylabel('Количество атомов')
+ax1.set_title('Изменение количества атомов')
+ax1.set_yscale('log')
+ax1.legend()
+
+# График 2: Сечения поглощения
+names = [el['name'] for el in elements]
+cross_sections = [el['cross_section'] for el in elements]
+ax2.bar(names, cross_sections)
+ax2.set_ylabel('Сечение (барн)')
+ax2.set_title('Сечения нейтронного поглощения')
+ax2.set_yscale('log')
+
+# График 3: Энергетический баланс
+ax3.plot(time_span, np.cumsum(energy_released), label='Выделенная', linewidth=2)
+ax3.plot(time_span, np.cumsum(energy_input), label='Потребленная', linewidth=2)
+ax3.set_xlabel('Время (с)')
+ax3.set_ylabel('Энергия (Дж)')
+ax3.set_title('Кумулятивная энергия')
+ax3.legend()
+
+# График 4: Экономическая ценность
+economic_values = [abs(row['value_change_usd']) for row in economic_results]
+element_names = [row['element'] for row in economic_results]
+colors = ['red' if val < 0 else 'green' for val in [row['value_change_usd'] for row in economic_results]]
+ax4.bar(element_names, economic_values, color=colors, alpha=0.7)
+ax4.set_ylabel('Изменение стоимости ($)')
+ax4.set_title('Экономическое воздействие')
+ax4.tick_params(axis='x', rotation=45)
+
+plt.tight_layout()
+plt.show()
+
+print("\n=== КЛЮЧЕВЫЕ ИСПРАВЛЕНИЯ ===")
+print("1. Реальные сечения нейтронного поглощения (барны)")
+print("2. Физически корректные ядерные реакции")  
+print("3. Правильный расчет энергетического баланса")
+print("4. Реалистичные рыночные цены элементов")
+print("5. Учет энергозатрат на производство нейтронов")
