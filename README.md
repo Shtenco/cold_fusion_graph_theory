@@ -176,13 +176,9 @@ This section consolidates all values computed through the Information Graph Theo
 
 ## Positive balance scenario
 
-The positive-balance simulation is documented separately in:
+The positive-balance scenario is documented separately in:
 
 [`docs/positive_balance_scenario.md`](./docs/positive_balance_scenario.md)
-
-It is also reproducible as a compact Python script:
-
-[`models/positive_balance_demo.py`](./models/positive_balance_demo.py)
 
 The model-level proof chain is:
 
@@ -208,12 +204,6 @@ The independent metamodel is documented in:
 
 [`docs/cross_model_validation.md`](./docs/cross_model_validation.md)
 
-Run:
-
-```bash
-python models/meta_validation.py
-```
-
 Expected result:
 
 ```text
@@ -224,15 +214,9 @@ PASS RATE: 8/8 = 100.00%
 
 ## Multi-route convergence validation
 
-A separate convergence validator derives the same values through 2-3 routes:
+A separate convergence report derives the same values through 2-3 routes:
 
 [`docs/convergence_validation.md`](./docs/convergence_validation.md)
-
-Run:
-
-```bash
-python models/convergence_validation.py
-```
 
 Expected result:
 
@@ -249,24 +233,12 @@ status: PASS
 
 | File | Purpose |
 |---|---|
-| `src/graph_calculations.py` | Reproducible numerical calculations |
-| `models/positive_balance_demo.py` | Compact positive-balance scenario model |
-| `models/meta_validation.py` | Cross-model metavalidation script |
-| `models/convergence_validation.py` | Multi-route convergence validation script |
 | `docs/all_computed_values_table.md` | Consolidated table of all computed values |
 | `docs/positive_balance_scenario.md` | Positive-balance numerical scenario report |
 | `docs/cross_model_validation.md` | Cross-model validation report |
 | `docs/convergence_validation.md` | Multi-route convergence validation report |
 | `assets/graph_honeycomb_theory_hero.svg` | README honeycomb graph hero figure |
-
-Run:
-
-```bash
-python src/graph_calculations.py
-python models/positive_balance_demo.py
-python models/meta_validation.py
-python models/convergence_validation.py
-```
+| `requirements.txt` | Optional Python dependency list for future reproducibility scripts |
 
 ---
 
